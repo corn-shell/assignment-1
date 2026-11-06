@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -165,7 +166,57 @@ class Agent:
         # ``content`` of the skill file for ``invoke_skill``. Reject duplicate
         # names and malformed or missing frontmatter with a clear
         # ``ValueError``.
-        raise NotImplementedError
+        if not skills_path.is_dir():
+            raise ValueError(f"Skills path is not a valid directory: {skills_path}")
+
+        skills: dict[str, dict[str, str]] = {}
+
+        for directory in sorted(skills_path.iterdir()):
+            if not directory.is_dir():
+                continue 
+
+            skill_file = directory / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+
+            content = skill_file.read_text(encoding="utf-8")
+            lines = content.splitlines()
+
+            if not lines or lines[0].strip() != '---':
+                raise ValueError(f"Missing YAML frontmatter: {skill_file}")
+            end = next(
+                (i for i in range(1, len(lines)) if lines[i].strip() == "---"),
+                None,
+            )
+
+            if end is None:
+                raise ValueError(f"Unclosed YAML frontmatter: {skill_file}")
+
+            try:
+                frontmatter = yaml.safe_load("\n".join(lines[1:end]))
+            except yaml.YAMLError as exc:
+                raise ValueError(f"Malformed YAML in {skill_file}: {exc}") from exc
+
+            if not isinstance(frontmatter, dict):
+                raise ValueError(f"Frontmatter must be a mapping: {skill_file}")
+
+            name = frontmatter.get("name")
+            description = frontmatter.get("description")
+
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"Missing or invalid skill name: {skill_file}")
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(f"Missing or invalid skill description: {skill_file}")
+
+            name = name.strip()
+            if name in skills:
+                raise ValueError(f"Duplicate skill name {name!r}: {skill_file}")
+
+            skills[name] = {
+                "metadata": description.strip(),
+                "content": content,
+            }
+        return skills
 
     def query_language_model(self) -> dict[str, Any]:
         """Send one tool-enabled Chat Completions request and normalize it."""
@@ -339,7 +390,7 @@ class Agent:
             while not self.finished:
                 if self.steps_taken >= self.step_limit:
                     raise StepLimitError(
-                        f"Agent reached its limit of {self.step_limit} model calls".
+                        f"Agent reached its limit of {self.step_limit} model calls"
                     )
                 message = self.query_language_model()
                 self.history.append(message)
@@ -362,7 +413,6 @@ class Agent:
             # and handles the threshold, and tracks compaction events for
             # logging.
 
-            raise NotImplementedError
         finally:
             # This block is provided infrastructure. Do not modify it: a
             # trajectory is required even when a run fails.

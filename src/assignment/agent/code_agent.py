@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from assignment.agent.base import (
@@ -45,6 +46,7 @@ class CodeAgent(Agent):
 
         # TODO(Part 1.3): Make the `execute` and `send_message` tools available
         # to the agent.
+        self.tools.extend([EXECUTE_TOOL, SEND_MESSAGE_TOOL])
 
         # TODO(1.1.b): Construct the system prompt and task_prompt. These
         # should be usable by the `Agent.build_prompt` method.
@@ -60,15 +62,24 @@ class CodeAgent(Agent):
             "make appropriate changes, and run relevant tests.\n"
             "Inspect tool results before deciding your next action. "
             "If an action fails, use the observation to adjust your approach.\n"
+            "call send_message with your final summary to end the run.\n"
             "Report verified results accurately and distinguish them from asumptions.\n\n"
             "<system_information>\n"
             f"{json.dumps(system_information, indent=2)}\n"
             "</system_information>"
         )
+        self.task_prompt = task
 
         # TODO(1.4): If any skills are available to the agent, make their
         # descriptions/metadata available to the agent in the prompt.
-
+        if self.skills:
+            catalog = "\n".join(
+                f"- {name}: {skill['metadata']}"
+                for name, skill in sorted(self.skills.items())
+            )
+            self.system_prompt += (
+                "\n\nAvailable skills (load with invoke_skill before using):\n" + catalog
+            )
     def execute_tool_calls(
         self, tool_calls: list[dict[str, Any]]
     ) -> list[dict[str, str]]:
@@ -89,13 +100,29 @@ class CodeAgent(Agent):
                     raise ValueError("Tool arguments must be a JSON object")
 
                 if name == "execute":
-                    content = json.dumps(self.env.execute(**arguments))
+                    print(
+                        f"[execute] timeout={arguments.get('timeout')} "
+                        f"cwd={arguments.get('cwd') or self.env.cwd}: "
+                        f"{arguments.get('command')}",
+                        flush=True,
+                    )
+                    started = time.monotonic()
+                    result = self.env.execute(**arguments)
+                    print(
+                        f"[execute] finished in {time.monotonic() - started:.1f}s; "
+                        f"returncode={result.get('returncode')}; "
+                        f"exception={result.get('exception_info') or 'none'}",
+                        flush=True,
+                    )
+                    content = json.dumps(result)
                 elif name == "send_message":
                     summary = arguments["summary"]
                     if not isinstance(summary, str):
                         raise ValueError("summary must be a string")
-                    print(summary)
                     content = summary
+                    self.finished = True
+                elif name == "invoke_skill":
+                    content = self.skills[arguments["name"]]["content"]
                 else:
                     content = f"Error: Unknown tool {name!r}"
             except (KeyError, TypeError, ValueError) as exc:
