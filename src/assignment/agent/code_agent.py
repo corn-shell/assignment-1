@@ -44,6 +44,7 @@ class CodeAgent(Agent):
         )
         self.task = task
         self.submitted_patch = ""
+        self._consecutive_tool_errors = 0
 
         # TODO(Part 1.3): Make the `execute` and `send_message` tools available
         # to the agent.
@@ -82,6 +83,11 @@ class CodeAgent(Agent):
             self.system_prompt += (
                 "\n\nAvailable skills (load with invoke_skill before using):\n" + catalog
             )
+    def query_language_model(self):
+        if self._consecutive_tool_errors >= 6:
+            raise RuntimeError("Aborting after 6 consecutive invalid tool calls")
+        return super().query_language_model()
+
     def execute_tool_calls(
         self, tool_calls: list[dict[str, Any]]
     ) -> list[dict[str, str]]:
@@ -92,9 +98,18 @@ class CodeAgent(Agent):
         # response!). Malformed JSON and unknown tools must become recoverable
         # observations relayed to the agent instead of exceptions.
         
+        # Defer the abort until the next action so the last linked observations
+        # are retained by the shared loop and saved in the trajectory.
+        if self._consecutive_tool_errors >= 6:
+            raise RuntimeError("Aborting after 6 consecutive invalid tool calls")
         messages = []
         for call in tool_calls:
+            failed = False
             try:
+                if self.finished:
+                    raise ValueError("The task has already been submitted")
+                if self._consecutive_tool_errors >= 6:
+                    raise ValueError("Failure limit reached; no further tools will execute")
                 function = call["function"]
                 name = function["name"]
                 arguments = json.loads(function["arguments"])
@@ -111,6 +126,11 @@ class CodeAgent(Agent):
                             'Put the entire shell script in the "command" value. '
                             'Example: {"command": "pwd; ls -la"}.'
                         )
+                    command = arguments.get("command")
+                    if not isinstance(command, (str, list)) or not command:
+                        raise ValueError("command must be a non-empty string or argv list")
+                    if isinstance(command, list) and not all(isinstance(arg, str) for arg in command):
+                        raise ValueError("Every command argv entry must be a string")
                     print(
                         f"[execute] timeout={arguments.get('timeout')} "
                         f"cwd={arguments.get('cwd') or self.env.cwd}: "
@@ -130,14 +150,34 @@ class CodeAgent(Agent):
                     summary = arguments["summary"]
                     if not isinstance(summary, str):
                         raise ValueError("summary must be a string")
+                    patch_result = self.env.execute("cat patch.txt")
+                    patch = patch_result.get("stdout", patch_result.get("output", ""))
+                    if patch_result.get("returncode") != 0 or not patch.strip():
+                        raise ValueError(
+                            "Submission rejected: patch.txt is missing, unreadable, or empty. "
+                            "Create and verify the required patch before calling send_message again."
+                        )
+                    self.submitted_patch = patch
                     content = summary
                     self.finished = True
                 elif name == "invoke_skill":
                     content = self.skills[arguments["name"]]["content"]
                 else:
-                    content = f"Error: Unknown tool {name!r}"
+                    raise ValueError(f"Unknown tool {name!r}")
             except (KeyError, TypeError, ValueError) as exc:
                 content = f"Error: {exc}"
+                failed = True
+
+            if failed:
+                self._consecutive_tool_errors += 1
+                if self._consecutive_tool_errors >= 3:
+                    content += (
+                        '\nRecovery: send one simple execute call: {"command": "pwd"}. '
+                        'Put the entire script in command; do not add a bash -lc wrapper. '
+                        f'Consecutive invalid calls: {self._consecutive_tool_errors}/6.'
+                    )
+            else:
+                self._consecutive_tool_errors = 0
 
             messages.append({
                 "role": "tool",
