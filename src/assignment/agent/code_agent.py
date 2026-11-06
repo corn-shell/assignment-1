@@ -48,6 +48,24 @@ class CodeAgent(Agent):
 
         # TODO(1.1.b): Construct the system prompt and task_prompt. These
         # should be usable by the `Agent.build_prompt` method.
+        system_information = {
+            "machine": self.env.machine,
+            "release": self.env.release,
+            "system": self.env.system,
+            "version": self.env.version,
+        }
+        self.system_prompt: str = (
+            "You are a coding agent tasked with fixing software issues.\n"
+            "Use the execute tool to inspect the repository, reproduce the issue, "
+            "make appropriate changes, and run relevant tests.\n"
+            "Inspect tool results before deciding your next action. "
+            "If an action fails, use the observation to adjust your approach.\n"
+            "Report verified results accurately and distinguish them from asumptions.\n\n"
+            "<system_information>\n"
+            f"{json.dumps(system_information, indent=2)}\n"
+            "</system_information>"
+        )
+
         # TODO(1.4): If any skills are available to the agent, make their
         # descriptions/metadata available to the agent in the prompt.
 
@@ -60,4 +78,32 @@ class CodeAgent(Agent):
         # one message per call (there may be multiple tool calls in one agent
         # response!). Malformed JSON and unknown tools must become recoverable
         # observations relayed to the agent instead of exceptions.
-        raise NotImplementedError
+        
+        messages = []
+        for call in tool_calls:
+            try:
+                function = call["function"]
+                name = function["name"]
+                arguments = json.loads(function["arguments"])
+                if not isinstance(arguments, dict):
+                    raise ValueError("Tool arguments must be a JSON object")
+
+                if name == "execute":
+                    content = json.dumps(self.env.execute(**arguments))
+                elif name == "send_message":
+                    summary = arguments["summary"]
+                    if not isinstance(summary, str):
+                        raise ValueError("summary must be a string")
+                    print(summary)
+                    content = summary
+                else:
+                    content = f"Error: Unknown tool {name!r}"
+            except (KeyError, TypeError, ValueError) as exc:
+                content = f"Error: {exc}"
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": content,
+            })
+        return messages

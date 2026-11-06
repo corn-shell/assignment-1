@@ -132,23 +132,7 @@ class Agent:
 
         # Each agent supplies its own opening messages: the standing
         # instructions, and the task statement that starts the run.
-        system_information = {
-            "machine": self.env.machine,
-            "release": self.env.release,
-            "system": self.env.system,
-            "version": self.env.version,
-        }
-        self.system_prompt: str = (
-            "You are a coding agent tasked with fixing software issues.\n"
-            "Use the execute tool to inspect the repository, reproduce the issue, "
-            "make appropriate changes, and run relevant tests.\n"
-            "Inspect tool results before deciding your next action. "
-            "If an action fails, use the observation to adjust your approach.\n"
-            "Report verified results accurately and distinguish them from asumptions.\n\n"
-            "<system_information>\n"
-            f"{json.dumps(system_information, indent=2)}\n"
-            "</system_information>"
-        )
+        self.system_prompt: str = ""
         self.task_prompt: str = ""
 
         self.api_prompts: list[list[dict[str, Any]]] = []
@@ -351,6 +335,27 @@ class Agent:
             # step. Ensure you identify when the agent has completed the task
             # by setting `Agent.finished`. If the agent exceeds the
             # `step_limit`, raise `StepLimitError`.
+
+            while not self.finished:
+                if self.steps_taken >= self.step_limit:
+                    raise StepLimitError(
+                        f"Agent reached its limit of {self.step_limit} model calls".
+                    )
+                message = self.query_language_model()
+                self.history.append(message)
+
+                tool_calls = message.get("tool_calls") or []
+                if tool_calls:
+                    observations = self.execute_tool_calls(tool_calls)
+                    self.history.extend(observations)
+                else:
+                    self.history.append({
+                        "role": "user",
+                        "content" : (
+                            "No tool call was provided. Continue working on the task "
+                            "using the avialable tools."
+                        )
+                    })
 
             # TODO(2.2) Call `maybe_compact_context()` before each new action
             # request in your shared loop. It already estimates active tokens
