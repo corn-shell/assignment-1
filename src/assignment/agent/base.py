@@ -132,7 +132,23 @@ class Agent:
 
         # Each agent supplies its own opening messages: the standing
         # instructions, and the task statement that starts the run.
-        self.system_prompt: str = ""
+        system_information = {
+            "machine": self.env.machine,
+            "release": self.env.release,
+            "system": self.env.system,
+            "version": self.env.version,
+        }
+        self.system_prompt: str = (
+            "You are a coding agent tasked with fixing software issues.\n"
+            "Use the execute tool to inspect the repository, reproduce the issue, "
+            "make appropriate changes, and run relevant tests.\n"
+            "Inspect tool results before deciding your next action. "
+            "If an action fails, use the observation to adjust your approach.\n"
+            "Report verified results accurately and distinguish them from asumptions.\n\n"
+            "<system_information>\n"
+            f"{json.dumps(system_information, indent=2)}\n"
+            "</system_information>"
+        )
         self.task_prompt: str = ""
 
         self.api_prompts: list[list[dict[str, Any]]] = []
@@ -152,6 +168,7 @@ class Agent:
 
         # TODO(1.1.a): Add machinery to maintain agent state as it takes actions
         # and observes the results.
+        self.history: list[dict[str, Any]] = []
 
     def load_skills(self, skills_path: Path) -> dict[str, dict[str, str]]:
         """Load the skill folders exposed to this agent."""
@@ -227,7 +244,11 @@ class Agent:
 
         # You want to be careful about which attributes of the class you modify
         # here as they may also be handled by the subclasses.
-        raise NotImplementedError
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": self.task_prompt},
+            *self.history
+        ]
 
     def estimate_active_prompt_tokens(self) -> int:
         """Estimate the next prompt, calibrated by the provider's latest usage."""
