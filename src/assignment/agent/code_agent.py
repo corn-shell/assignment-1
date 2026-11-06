@@ -10,6 +10,7 @@ from assignment.agent.base import (
     DEFAULT_COMPACTION_KEEP_RECENT_STEPS,
     DEFAULT_COMPACTION_MAX_TOKENS,
     Agent,
+    format_tool_output,
 )
 from assignment.agent.tools import EXECUTE_TOOL, SEND_MESSAGE_TOOL
 from assignment.env import Environment
@@ -51,6 +52,7 @@ class CodeAgent(Agent):
         # TODO(1.1.b): Construct the system prompt and task_prompt. These
         # should be usable by the `Agent.build_prompt` method.
         system_information = {
+            "cwd": self.env.cwd,
             "machine": self.env.machine,
             "release": self.env.release,
             "system": self.env.system,
@@ -63,7 +65,7 @@ class CodeAgent(Agent):
             "Inspect tool results before deciding your next action. "
             "If an action fails, use the observation to adjust your approach.\n"
             "call send_message with your final summary to end the run.\n"
-            "Report verified results accurately and distinguish them from asumptions.\n\n"
+            "Report verified results accurately and distinguish them from assumptions.\n\n"
             "<system_information>\n"
             f"{json.dumps(system_information, indent=2)}\n"
             "</system_information>"
@@ -100,6 +102,15 @@ class CodeAgent(Agent):
                     raise ValueError("Tool arguments must be a JSON object")
 
                 if name == "execute":
+                    schema = EXECUTE_TOOL["function"]["parameters"]
+                    unexpected = set(arguments) - set(schema["properties"])
+                    if unexpected:
+                        raise ValueError(
+                            "Invalid execute arguments: unexpected parameter names "
+                            f"{sorted(unexpected)!r}. "
+                            'Put the entire shell script in the "command" value. '
+                            'Example: {"command": "pwd; ls -la"}.'
+                        )
                     print(
                         f"[execute] timeout={arguments.get('timeout')} "
                         f"cwd={arguments.get('cwd') or self.env.cwd}: "
@@ -114,7 +125,7 @@ class CodeAgent(Agent):
                         f"exception={result.get('exception_info') or 'none'}",
                         flush=True,
                     )
-                    content = json.dumps(result)
+                    content = format_tool_output(result)
                 elif name == "send_message":
                     summary = arguments["summary"]
                     if not isinstance(summary, str):
